@@ -1,0 +1,232 @@
+#!/bin/bash 
+
+# Print the usage of the localuser tool
+function usage()
+{
+  if [[ $# -eq 1  ]] && [ "$1" == "help" ]; then
+    echo "usage: localuser command [options]"
+    echo "where command is:"
+    echo "    help [command]"
+    echo "    add name [options]"
+    echo "    delete name [options]"
+    echo "for more specific help, try 'localuser help add'"
+  elif [[ $# -eq 2 ]] && [ "$1" == "help" ]; then
+    case $2 in 
+      "add")    echo "usage: localuser add login [options]"
+                echo "where options are:"
+                echo "    --home dir - set the home directory to 'dir'"
+                echo "    --name fullname - set the username to 'fullname'"
+                echo "    --shell sh - set user shell to 'sh'"
+                echo "    --skel dir - use skeleton directory 'dir' to build user home"
+                echo "    --noexec - do not execute the commands, print them"
+                ;;
+
+      "delete")
+                ;;
+
+      *)
+          echo "ERROR: unknown $1 option $2"
+                ;;
+    esac
+  fi
+  echo
+}
+
+# Parse the command line options and set the appropriate environment before adding the new user
+function parse_options ()
+{
+  while [[ $# -gt 0 ]]; do
+    optarg="$1"
+    case $optarg in
+    --home)
+            usr_home_dir=$2
+            shift
+            shift
+            ;;
+
+    --name)
+            usr_full_name=$2
+            shift
+            shift
+            ;;
+
+    --shell)
+            usr_shell=$2
+            shift
+            shift
+            ;;
+
+    --skel)
+            usr_skel_dir=$2
+            shift
+            shift
+            ;;
+
+    --noexec)
+            no_exec=1
+            shift
+            ;;
+
+    *)
+            shift
+            ;;
+    esac
+  done 
+}
+
+# Check if the new user name provided is already an existing local user
+function check_new_usr ()
+{
+  usr_record=""
+  usr_record=`sudo grep -w $1 $PASSWD_FILE`
+  if [ "$usr_record" != "" ]; then
+    echo "ERROR: $1 already exists as a user"
+    exit 3
+  fi
+  #TODO: Can also include the logic to check the /etc/group file for new user name provided
+}
+
+# Check if the new home directory already exists in the file system hierarchy
+function check_new_home_dir ()
+{
+  if [ -d "$1" ]; then
+    echo "ERROR: home directory $1 already exists"
+    exit 4
+  fi
+}
+
+# Find the least unused user id 
+function find_new_uid ()
+{
+  min_uid=$(cat /etc/login.defs | grep 'UID_MIN' | grep -v '_UID' | awk '{print $2}')
+  max_uid=$(cat /etc/login.defs | grep 'UID_MAX' | grep -v '_UID' | awk '{print $2}')
+  cur_max_uid=0
+  for i in $(cat $PASSWD_FILE | awk -F':' '{print $3}' | sort -n | tail -20); do
+    if [ "$i" -gt "$min_uid" ] && [ "$i" -lt "$max_uid" ] && [ "$i" -gt $cur_max_uid ]; then
+      cur_max_uid=$(expr "$i")
+    fi
+  done
+
+  cur_max_uid=$(expr $cur_max_uid + 1)
+  echo $cur_max_uid
+}
+
+# Find the least unused group id
+function find_new_gid ()
+{
+  min_gid=$(cat /etc/login.defs | grep 'GID_MIN' | grep -v '_GID' | awk '{print $2}')
+  max_gid=$(cat /etc/login.defs | grep 'GID_MAX' | grep -v '_GID' | awk '{print $2}')
+  cur_max_gid=0
+  for i in $(cat $GROUP_FILE | awk -F':' '{print $3}' | sort -n | tail -20); do
+    if [ "$i" -gt "$min_gid" ] && [ "$i" -lt "$max_gid" ] && [ "$i" -gt $cur_max_gid ]; then
+      cur_max_gid=$(expr "$i")
+    fi
+  done
+  cur_max_gid=$(expr $cur_max_gid + 1)
+  echo $cur_max_gid
+}
+
+#####################################################################
+#####################################################################
+# Check if running as a root or with root privileges
+if [ "$EUID" -ne 0 ]; then
+  echo "ERROR: you must be administrator to execute 'localuser'"
+  echo 
+  exit 1
+fi
+
+PASSWD_FILE="/etc/passwd"
+SHADOW_FILE="/etc/shadow"
+GROUP_FILE="/etc/group"
+GSHADOW_FILE="/etc/gshadow"
+DEFAULT_SKEL_DIR="/etc/skel"
+
+new_usr_name="" 
+usr_home_dir=""
+usr_full_name=""
+usr_shell="/bin/bash"             # By default Bash shell will be configured unless other shells specified from cmd line
+usr_skel_dir=""                   # Skeleton directory to be used to build the user home directory
+no_exec=0                         # Set it to 1 if --no_exec option is specified
+new_uid=-1
+new_gid=-1
+passwd_record=""
+group_record=""
+shadow_record=""
+gshadow_record=""
+days_since_epoch=$(echo $(($(date +%s) / 60 / 60 / 24)))
+
+if [[ $# -gt 0 ]]; then
+  case $1 in
+    "help")   usage $@
+              ;;
+
+    "add")
+              #TODO: Parse command line options here.
+              parse_options "$@"
+
+              #TODO: Check if username is specified after add option. If not error out with appropriate message
+              if [[ $# -gt 1 ]]; then 
+                new_usr_name=$2
+                check_new_usr "$2"
+              fi
+          
+              #TODO: If the home directory is specified from cmd line, check if the directory already exists. If 'yes' then error out with msg
+              check_new_home_dir $usr_home_dir
+              if [ "$usr_home_dir" == "" ]; then
+                usr_home_dir="/home/$new_usr_name"
+              fi
+
+	      if [ "$usr_skel_dir" == "" ]; then
+		usr_skel_dir="$DEFAULT_SKEL_DIR"
+	      fi
+
+              #TODO: Find the available UID for new user
+              new_uid=$(find_new_uid)
+
+              #TODO: Find the available GID for new user
+              new_gid=$(find_new_gid)
+
+              #TODO: Create record for /etc/passwd file to add new user
+              passwd_record=$(echo "$new_usr_name:x:$new_uid:$new_gid:$usr_full_name:$usr_home_dir:$usr_shell")
+
+              #TODO: Create record for /etc/shadow 
+              shadow_record=$(echo "$new_usr_name:!:$days_since_epoch:0:99999:7:::")
+
+              #TODO: Create record for /etc/group
+              group_record=$(echo "$new_usr_name:x:$new_gid:")
+
+              #TODO: Create record for /etc/gshadow 
+              gshadow_record=$(echo "$new_usr_name:!::")
+
+              #TODO: Check if --no_exec option is specified. If 'yes' then print the possible steps of execution to stdout without executing
+              if ((no_exec == 1)); then
+		echo 'echo "'$passwd_record'" >> '"$PASSWD_FILE"
+		echo 'echo "'$shadow_record'" >> '"$SHADOW_FILE"
+		echo 'echo "'$group_record'" >> '"$GROUP_FILE"
+		echo 'echo "'$gshadow_record'" >> '"$GSHADOW_FILE"
+		echo "cp -r $usr_skel_dir $usr_home_dir"
+		echo "chown -R $new_usr_name:$new_usr_name $usr_home_dir"
+		exit 0
+              fi
+
+              #TODO: Add the newuser along with the configured options
+		echo "$passwd_record" >> "$PASSWD_FILE"
+		echo "$shadow_record" >> "$SHADOW_FILE"
+		echo "$group_record" >> "$GROUP_FILE"
+		echo "$gshadow_record" >> "$GSHADOW_FILE"
+		cp -r $usr_skel_dir $usr_home_dir
+		sudo chown -R $new_usr_name:$new_usr_name $usr_home_dir
+		exit 0
+              ;;
+
+    "delete")
+              ;;
+
+    *)
+              echo "try 'localuser help'"
+              exit 1
+  esac
+else
+  echo "try 'localuser help'"
+  exit 1
+fi
